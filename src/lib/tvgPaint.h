@@ -48,6 +48,8 @@ namespace tvg
         uint32_t flag = RenderUpdateFlag::None;
         Paint* cmpTarget = nullptr;
         CompositeMethod cmpMethod = CompositeMethod::None;
+        BlendingMode blendingMode = BlendingMode::Normal;
+
         uint8_t opacity = 255;
         PaintType type;
 

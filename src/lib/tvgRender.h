@@ -28,7 +28,7 @@
 namespace tvg
 {
 
-enum RenderUpdateFlag {None = 0, Path = 1, Color = 2, Gradient = 4, Stroke = 8, Transform = 16, Image = 32, GradientStroke = 64, All = 127};
+enum RenderUpdateFlag {None = 0, Path = 1, Color = 2, Gradient = 4, Stroke = 8, Transform = 16, Image = 32, GradientStroke = 64, Blending = 128, All = 255};
 
 struct Surface
 {
@@ -100,6 +100,8 @@ public:
     virtual Compositor* target(const RenderRegion& region) = 0;
     virtual bool beginComposite(Compositor* cmp, CompositeMethod method, uint32_t opacity) = 0;
     virtual bool endComposite(Compositor* cmp) = 0;
+
+    virtual void blending(BlendingMode blendingMode) = 0;
 };
 
 }

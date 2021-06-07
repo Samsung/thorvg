@@ -49,6 +49,8 @@ public:
     bool beginComposite(Compositor* cmp, CompositeMethod method, uint32_t opacity) override;
     bool endComposite(Compositor* cmp) override;
 
+    void blending(BlendingMode blendingMode) override;
+
     static GlRenderer* gen();
     static int init(TVG_UNUSED uint32_t threads);
     static int term();

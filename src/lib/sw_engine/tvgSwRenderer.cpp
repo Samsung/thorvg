@@ -522,6 +522,11 @@ bool SwRenderer::endComposite(Compositor* cmp)
     return true;
 }
 
+void SwRenderer::blending(BlendingMode blendingMode)
+{
+    surface->blendingMode = blendingMode;
+}
+
 
 bool SwRenderer::dispose(RenderData data)
 {

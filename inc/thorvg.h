@@ -151,6 +151,11 @@ enum class TVG_EXPORT CanvasEngine
     Gl = (1 << 2)  ///< OpenGL rasterizer.
 };
 
+/**
+ * @brief Enumeration specifying the blending mode used for paint blending.
+ */
+enum class TVG_EXPORT BlendingMode { Normal = 0, Screen, Multiply, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion };
+
 
 /**
  * @brief A data structure representing a point in two-dimensional space.
@@ -270,6 +275,16 @@ public:
     Result composite(std::unique_ptr<Paint> target, CompositeMethod method) noexcept;
 
     /**
+     * @brief Sets the blending mode for paint.
+     *
+     * @param[in] blendingMode The blendingMode for paint.
+     *
+     * @return Result::Success when succeed.
+     *
+     */
+    Result blending(BlendingMode blendingMode) const noexcept;
+
+    /**
      * @brief Gets the bounding box of the paint object before any transformation.
      *
      * @param[out] x The x coordinate of the upper left corner of the object.
@@ -298,6 +313,13 @@ public:
      * @return The opacity value in the range [0 ~ 255], where 0 is completely transparent and 255 is opaque.
      */
     uint8_t opacity() const noexcept;
+
+    /**
+     * @brief Gets the blending of the object.
+     *
+     * @return The BlendingMode (0 if blending normal).
+     */
+    BlendingMode blending() const noexcept;
 
     _TVG_DECLARE_ACCESSOR();
     _TVG_DECLARE_PRIVATE(Paint);

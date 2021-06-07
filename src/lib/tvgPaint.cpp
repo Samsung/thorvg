@@ -102,6 +102,7 @@ Paint* Paint::Impl::duplicate()
     }
 
     ret->pImpl->opacity = opacity;
+    ret->pImpl->blendingMode = blendingMode;
 
     if (cmpTarget) ret->pImpl->cmpTarget = cmpTarget->duplicate();
 
@@ -176,6 +177,7 @@ bool Paint::Impl::render(RenderMethod& renderer)
 
     if (cmp) renderer.beginComposite(cmp, cmpMethod, cmpTarget->pImpl->opacity);
 
+    renderer.blending(blendingMode);
     auto ret = smethod->render(renderer);
 
     if (cmp) renderer.endComposite(cmp);
@@ -305,6 +307,22 @@ Result Paint::composite(std::unique_ptr<Paint> target, CompositeMethod method) n
 {
     if (pImpl->composite(target.release(), method)) return Result::Success;
     return Result::InvalidArguments;
+}
+
+Result Paint::blending(BlendingMode blendingMode) const noexcept
+{
+    if (pImpl->blendingMode == blendingMode) return Result::Success;
+
+    pImpl->blendingMode = blendingMode;
+    pImpl->flag |= RenderUpdateFlag::Blending;
+
+    return Result::Success;
+}
+
+
+BlendingMode Paint::blending() const noexcept
+{
+    return pImpl->blendingMode;
 }
 
 

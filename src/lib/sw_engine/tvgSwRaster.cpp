@@ -88,9 +88,125 @@ static bool _identify(const Matrix* transform)
 
 static bool _translucent(const SwSurface* surface, uint8_t a)
 {
-    if (a < 255) return true;
+    if (a < 255 || surface->blendingMode != BlendingMode::Normal) return true;
     if (!surface->compositor || surface->compositor->method == CompositeMethod::None) return false;
     return true;
+}
+
+static uint32_t _blendLayers(uint32_t src, uint32_t dst, uint8_t alpha, uint8_t ialpha, uint32_t src_blended, BlendingMode mode)
+{
+    switch (mode)
+    {
+        default:
+        case BlendingMode::Normal:
+        {
+            // Normal: A + B
+            return src_blended + ALPHA_BLEND(dst, ialpha);
+        }
+        case BlendingMode::Screen:
+        {
+            // Screen: 1 - (1-A)*(1-B) = A + B - A*B
+            return (LIMIT_BYTE(((src_blended >> 16) & 0xff) - ((((src_blended >> 16) & 0xff) * ((dst >> 16) & 0xff)) >> 8) + ((dst >> 16) & 0xff)) << 16)
+                    | (LIMIT_BYTE(((src_blended >> 8) & 0xff) - ((((src_blended >> 8) & 0xff) * ((dst >> 8) & 0xff)) >> 8) + ((dst >> 8) & 0xff)) << 8)
+                    | LIMIT_BYTE((src_blended & 0xff) - (((src_blended & 0xff) * (dst & 0xff)) >> 8) + (dst & 0xff));
+        }
+        case BlendingMode::Multiply:
+        {
+            // Multiply: A*B
+            return (LIMIT_BYTE(((dst >> 16) & 0xff) * (((src_blended >> 16) & 0xff) + ialpha) >> 8) << 16)
+                    | (LIMIT_BYTE(((dst >> 8) & 0xff) * (((src_blended >> 8) & 0xff) + ialpha) >> 8) << 8)
+                    | LIMIT_BYTE((dst & 0xff) * ((src_blended & 0xff) + ialpha) >> 8);
+        }
+        case BlendingMode::Overlay:
+        {
+            // Overlay: B<=0.5: 2*A*B or B>0.5: 1-2*(1-A)*(1-B)
+            uint32_t result = ((dst & 0xff0000) <= 0x800000)
+                        ? ((2 * ((src >> 16) & 0xff) * ((dst >> 16) & 0xff)) >> 8) << 16 // multiply
+                        : (0xff - (2*(0xff - ((src >> 16) & 0xff))*(0xff - ((dst >> 16) & 0xff)) >> 8)) << 16; // screen
+            result |= ((dst & 0x00ff00) <= 0x008000)
+                        ? ((2 * ((src >> 8) & 0xff) * ((dst >> 8) & 0xff)) >> 8) << 8 // multiply
+                        : (0xff - (2*(0xff - ((src >> 8) & 0xff))*(0xff - ((dst >> 8) & 0xff)) >> 8)) << 8; // screen
+            result |= ((dst & 0x0000ff) <= 0x000080)
+                        ? ((2 * (src & 0xff) * (dst & 0xff)) >> 8) // multiply
+                        : (0xff - (2*(0xff - (src & 0xff))*(0xff - (dst & 0xff)) >> 8)); // screen
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::Darken:
+        {
+            // Darken: min(A, B)
+            uint32_t result = min(src & 0xff0000, dst & 0xff0000)
+                    | min(src & 0x00ff00, dst & 0x00ff00)
+                    | min(src & 0x0000ff, dst & 0x0000ff);
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::Lighten:
+        {
+            // Lighten: max(A, B)
+            uint32_t result = max(src & 0xff0000, dst & 0xff0000)
+                    | max(src & 0x00ff00, dst & 0x00ff00)
+                    | max(src & 0x0000ff, dst & 0x0000ff);
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::ColorDodge:
+        {
+            // ColorDodge: B / (1-A)
+            uint32_t src_inverted = 0xffffffff - src;
+            uint32_t result = ((src_inverted & 0xff0000) == 0) ? (dst & 0xff0000) : (LIMIT_BYTE(((dst >> 8) & 0xff00) / ((src_inverted >> 16) & 0xff)) << 16);
+            result |= ((src_inverted & 0x00ff00) == 0) ? (dst & 0x00ff00) : (LIMIT_BYTE((dst & 0xff00) / ((src_inverted >> 8) & 0xff)) << 8);
+            result |= ((src_inverted & 0x0000ff) == 0) ? (dst & 0x0000ff) : LIMIT_BYTE(((dst & 0xff) << 8) / (src_inverted & 0xff));
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::ColorBurn:
+        {
+            // ColorBurn: 1 - (1-B) / A
+            uint32_t dst_inverted = 0xffffffff - dst;
+            uint32_t result = (((src >> 16) & 0xff) == 0) ? (dst & 0xff0000) : (LIMIT_BYTE_LOW(0xff - ((((dst_inverted >> 16) & 0xff) << 8) / ((src >> 16) & 0xff))) << 16);
+            result |= (((src >> 8) & 0xff) == 0) ? (dst & 0xff00) : (LIMIT_BYTE_LOW(0xff - ((((dst_inverted >> 8) & 0xff) << 8) / ((src >> 8) & 0xff))) << 8);
+            result |= ((src & 0xff) == 0) ? (dst & 0xff) : (LIMIT_BYTE_LOW(0xff - (((dst_inverted & 0xff) << 8) / (src & 0xff))));
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::HardLight:
+        {
+            // HardLight: Layers-inverted overlay
+            uint32_t result = ((src & 0xff0000) <= 0x800000)
+                        ? ((2 * ((dst >> 16) & 0xff) * ((src >> 16) & 0xff)) >> 8) << 16 // multiply
+                        : (0xff - (2*(0xff - ((dst >> 16) & 0xff))*(0xff - ((src >> 16) & 0xff)) >> 8)) << 16; // screen
+            result |= ((src & 0x00ff00) <= 0x008000)
+                        ? ((2 * ((dst >> 8) & 0xff) * ((src >> 8) & 0xff)) >> 8) << 8 // multiply
+                        : (0xff - (2*(0xff - ((dst >> 8) & 0xff))*(0xff - ((src >> 8) & 0xff)) >> 8)) << 8; // screen
+            result |= ((src & 0x0000ff) <= 0x000080)
+                        ? ((2 * (dst & 0xff) * (src & 0xff)) >> 8) // multiply
+                        : (0xff - (2*(0xff - (dst & 0xff))*(0xff - (src & 0xff)) >> 8)); // screen
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::SoftLight:
+        {
+            // SoftLight: A<=0.5: (2*A-1)*(B-B^2)+B or A>0.5: (2*A-1)*(sqrt(B)-B)+B
+            uint32_t result = 0x000000;
+            for (uint8_t i = 0; i <= 16; i += 8) {
+                uint8_t src_b = (src >> i) & 0xff;
+                uint8_t dst_b = (dst >> i) & 0xff;
+                uint8_t soft = ((src_b < 0x80) ? ((2 * dst_b * src_b >> 8) + (dst_b * dst_b * (0xff - 2 * src_b) >> 16)) : (sqrt((float)dst_b/255) * (2 * src_b - 0xff) + (2 * dst_b * (0xff - src_b) >> 8)));
+                result |= soft << i;
+            }
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::Difference:
+        {
+            // Difference: |A - B|
+            uint32_t result = ABS_DIFFERENCE(src & 0xff0000, dst & 0xff0000)
+                | ABS_DIFFERENCE(src & 0x00ff00, dst & 0x00ff00)
+                | ABS_DIFFERENCE(src & 0x0000ff, dst & 0x0000ff);
+            return BLEND_COLORS(result, dst, alpha, ialpha);
+        }
+        case BlendingMode::Exclusion:
+        {
+            // Exclusion: 0.5 - 2*(A-0.5)*(B-0.5) = A + B - 2AB
+            return (LIMIT_BYTE(((src_blended >> 16) & 0xff) - ((((src_blended >> 16) & 0xff) * ((dst >> 16) & 0xff) * 2) >> 8) + ((dst >> 16) & 0xff)) << 16)
+                    | (LIMIT_BYTE(((src_blended >> 8) & 0xff) - ((((src_blended >> 8) & 0xff) * ((dst >> 8) & 0xff) * 2) >> 8) + ((dst >> 8) & 0xff)) << 8)
+                    | LIMIT_BYTE((src_blended & 0xff) - (((src_blended & 0xff) * (dst & 0xff) * 2) >> 8) + (dst & 0xff));
+        }
+    }
 }
 
 
@@ -98,12 +214,14 @@ static bool _translucent(const SwSurface* surface, uint8_t a)
 /* Rect                                                                 */
 /************************************************************************/
 
-static bool _translucentRect(SwSurface* surface, const SwBBox& region, uint32_t color)
+static bool _translucentRect(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
 {
     auto buffer = surface->buffer + (region.min.y * surface->stride) + region.min.x;
     auto h = static_cast<uint32_t>(region.max.y - region.min.y);
     auto w = static_cast<uint32_t>(region.max.x - region.min.x);
-    auto ialpha = 255 - surface->blender.alpha(color);
+    auto ialpha = 255 - a;
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t y = 0; y < h; ++y) {
         auto dst = &buffer[y * surface->stride];
@@ -114,8 +232,26 @@ static bool _translucentRect(SwSurface* surface, const SwBBox& region, uint32_t 
     return true;
 }
 
+static bool _translucentRectBlending(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
+{
+    auto buffer = surface->buffer + (region.min.y * surface->stride) + region.min.x;
+    auto h = static_cast<uint32_t>(region.max.y - region.min.y);
+    auto w = static_cast<uint32_t>(region.max.x - region.min.x);
 
-static bool _translucentRectAlphaMask(SwSurface* surface, const SwBBox& region, uint32_t color)
+    uint32_t color_blended = ALPHA_BLEND(color, a);
+    auto ialpha = 255 - a;
+
+    for (uint32_t y = 0; y < h; ++y) {
+        auto dst = &buffer[y * surface->stride];
+        for (uint32_t x = 0; x < w; ++x) {
+            dst[x] = _blendLayers(color, dst[x], a, ialpha, color_blended, surface->blendingMode);
+        }
+    }
+    return true;
+}
+
+
+static bool _translucentRectAlphaMask(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
 {
     auto buffer = surface->buffer + (region.min.y * surface->stride) + region.min.x;
     auto h = static_cast<uint32_t>(region.max.y - region.min.y);
@@ -126,6 +262,8 @@ static bool _translucentRectAlphaMask(SwSurface* surface, const SwBBox& region, 
 #endif
 
     auto cbuffer = surface->compositor->image.data + (region.min.y * surface->stride) + region.min.x;   //compositor buffer
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t y = 0; y < h; ++y) {
         auto dst = &buffer[y * surface->stride];
@@ -139,7 +277,7 @@ static bool _translucentRectAlphaMask(SwSurface* surface, const SwBBox& region, 
     return true;
 }
 
-static bool _translucentRectInvAlphaMask(SwSurface* surface, const SwBBox& region, uint32_t color)
+static bool _translucentRectInvAlphaMask(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
 {
     auto buffer = surface->buffer + (region.min.y * surface->stride) + region.min.x;
     auto h = static_cast<uint32_t>(region.max.y - region.min.y);
@@ -150,6 +288,8 @@ static bool _translucentRectInvAlphaMask(SwSurface* surface, const SwBBox& regio
 #endif
 
     auto cbuffer = surface->compositor->image.data + (region.min.y * surface->stride) + region.min.x;   //compositor buffer
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t y = 0; y < h; ++y) {
         auto dst = &buffer[y * surface->stride];
@@ -163,25 +303,30 @@ static bool _translucentRectInvAlphaMask(SwSurface* surface, const SwBBox& regio
     return true;
 }
 
-static bool _rasterTranslucentRect(SwSurface* surface, const SwBBox& region, uint32_t color)
+static bool _rasterTranslucentRect(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
 {
     if (surface->compositor) {
         if (surface->compositor->method == CompositeMethod::AlphaMask) {
-            return _translucentRectAlphaMask(surface, region, color);
+            return _translucentRectAlphaMask(surface, region, color, a);
         }
         if (surface->compositor->method == CompositeMethod::InvAlphaMask) {
-            return _translucentRectInvAlphaMask(surface, region, color);
+            return _translucentRectInvAlphaMask(surface, region, color, a);
         }
     }
-    return _translucentRect(surface, region, color);
+    if (surface->blendingMode != BlendingMode::Normal) {
+        return _translucentRectBlending(surface, region, color, a);
+    }
+    return _translucentRect(surface, region, color, a);
 }
 
 
-static bool _rasterSolidRect(SwSurface* surface, const SwBBox& region, uint32_t color)
+static bool _rasterSolidRect(SwSurface* surface, const SwBBox& region, uint32_t color, uint8_t a)
 {
     auto buffer = surface->buffer + (region.min.y * surface->stride);
     auto w = static_cast<uint32_t>(region.max.x - region.min.x);
     auto h = static_cast<uint32_t>(region.max.y - region.min.y);
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t y = 0; y < h; ++y) {
         rasterRGBA32(buffer + y * surface->stride, color, region.min.x, w);
@@ -195,10 +340,12 @@ static bool _rasterSolidRect(SwSurface* surface, const SwBBox& region, uint32_t 
 /************************************************************************/
 
 
-static bool _translucentRle(SwSurface* surface, const SwRleData* rle, uint32_t color)
+static bool _translucentRle(SwSurface* surface, const SwRleData* rle, uint32_t color, uint8_t a)
 {
     auto span = rle->spans;
     uint32_t src;
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t i = 0; i < rle->size; ++i) {
         auto dst = &surface->buffer[span->y * surface->stride + span->x];
@@ -214,7 +361,26 @@ static bool _translucentRle(SwSurface* surface, const SwRleData* rle, uint32_t c
 }
 
 
-static bool _translucentRleAlphaMask(SwSurface* surface, const SwRleData* rle, uint32_t color)
+static bool _translucentRleBlending(SwSurface* surface, SwRleData* rle, uint32_t color, uint8_t a)
+{
+   auto span = rle->spans;
+
+   for (uint32_t i = 0; i < rle->size; ++i) {
+       auto dst = &surface->buffer[span->y * surface->stride + span->x];
+       uint8_t alpha = (a * span->coverage) >> 8;
+       uint8_t ialpha = 255 - alpha;
+       uint32_t color_blended = ALPHA_BLEND(color, alpha);
+
+       for (uint32_t x = 0; x < span->len; ++x) {
+            dst[x] = _blendLayers(color, dst[x], alpha, ialpha, color_blended, surface->blendingMode);
+       }
+       ++span;
+   }
+   return true;
+}
+
+
+static bool _translucentRleAlphaMask(SwSurface* surface, const SwRleData* rle, uint32_t color, uint8_t a)
 {
 #ifdef THORVG_LOG_ENABLED
     cout <<"SW_ENGINE: Rle Alpha Mask Composition" << endl;
@@ -222,6 +388,8 @@ static bool _translucentRleAlphaMask(SwSurface* surface, const SwRleData* rle, u
     auto span = rle->spans;
     uint32_t src;
     auto cbuffer = surface->compositor->image.data;
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t i = 0; i < rle->size; ++i) {
         auto dst = &surface->buffer[span->y * surface->stride + span->x];
@@ -238,7 +406,7 @@ static bool _translucentRleAlphaMask(SwSurface* surface, const SwRleData* rle, u
     return true;
 }
 
-static bool _translucentRleInvAlphaMask(SwSurface* surface, SwRleData* rle, uint32_t color)
+static bool _translucentRleInvAlphaMask(SwSurface* surface, SwRleData* rle, uint32_t color, uint8_t a)
 {
 #ifdef THORVG_LOG_ENABLED
     cout <<"SW_ENGINE: Rle Inverse Alpha Mask Composition" << endl;
@@ -246,6 +414,8 @@ static bool _translucentRleInvAlphaMask(SwSurface* surface, SwRleData* rle, uint
     auto span = rle->spans;
     uint32_t src;
     auto cbuffer = surface->compositor->image.data;
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t i = 0; i < rle->size; ++i) {
         auto dst = &surface->buffer[span->y * surface->stride + span->x];
@@ -262,27 +432,32 @@ static bool _translucentRleInvAlphaMask(SwSurface* surface, SwRleData* rle, uint
     return true;
 }
 
-static bool _rasterTranslucentRle(SwSurface* surface, SwRleData* rle, uint32_t color)
+static bool _rasterTranslucentRle(SwSurface* surface, SwRleData* rle, uint32_t color, uint8_t a)
 {
     if (!rle) return false;
 
     if (surface->compositor) {
         if (surface->compositor->method == CompositeMethod::AlphaMask) {
-            return _translucentRleAlphaMask(surface, rle, color);
+            return _translucentRleAlphaMask(surface, rle, color, a);
         }
         if (surface->compositor->method == CompositeMethod::InvAlphaMask) {
-            return _translucentRleInvAlphaMask(surface, rle, color);
+            return _translucentRleInvAlphaMask(surface, rle, color, a);
         }
     }
-    return _translucentRle(surface, rle, color);
+    if (surface->blendingMode != BlendingMode::Normal) {
+        return _translucentRleBlending(surface, rle, color, a);
+    }
+    return _translucentRle(surface, rle, color, a);
 }
 
 
-static bool _rasterSolidRle(SwSurface* surface, const SwRleData* rle, uint32_t color)
+static bool _rasterSolidRle(SwSurface* surface, const SwRleData* rle, uint32_t color, uint8_t a)
 {
     if (!rle) return false;
 
     auto span = rle->spans;
+
+    if (a < 255) color = ALPHA_BLEND(color, a);
 
     for (uint32_t i = 0; i < rle->size; ++i) {
         if (span->coverage == 255) {
@@ -400,6 +575,29 @@ static bool _translucentImage(SwSurface* surface, const uint32_t *img, uint32_t 
 }
 
 
+static bool _translucentImageBlending(SwSurface* surface, const uint32_t *img, uint32_t w, TVG_UNUSED uint32_t h, uint32_t opacity, const SwBBox& region, const Matrix* invTransform)
+{
+    auto dbuffer = &surface->buffer[region.min.y * surface->stride + region.min.x];
+
+    for (auto y = region.min.y; y < region.max.y; ++y) {
+        auto dst = dbuffer;
+        auto ey1 = y * invTransform->e12 + invTransform->e13;
+        auto ey2 = y * invTransform->e22 + invTransform->e23;
+        for (auto x = region.min.x; x < region.max.x; ++x, ++dst) {
+            auto rX = static_cast<uint32_t>(roundf(x * invTransform->e11 + ey1));
+            auto rY = static_cast<uint32_t>(roundf(x * invTransform->e21 + ey2));
+            if (rX >= w || rY >= h) continue;
+            auto src = img[rX + (rY * w)];
+            auto src_blended = ALPHA_BLEND(src, opacity);
+            auto ialpha = 255 - surface->blender.alpha(src_blended);
+            *dst = _blendLayers(img[rX + (rY * w)], *dst, opacity, ialpha, src_blended, surface->blendingMode);
+        }
+        dbuffer += surface->stride;
+    }
+    return true;
+}
+
+
 static bool _translucentImageAlphaMask(SwSurface* surface, const uint32_t *img, uint32_t w, TVG_UNUSED uint32_t h, uint32_t opacity, const SwBBox& region, const Matrix* invTransform)
 {
 #ifdef THORVG_LOG_ENABLED
@@ -462,6 +660,9 @@ static bool _rasterTranslucentImage(SwSurface* surface, const uint32_t *img, uin
             return _translucentImageInvAlphaMask(surface, img, w, h, opacity, region, invTransform);
         }
     }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        return _translucentImageBlending(surface, img, w, h, opacity, region, invTransform);
+    }
     return _translucentImage(surface, img, w, h, opacity, region, invTransform);
 }
 
@@ -477,6 +678,26 @@ static bool _translucentImage(SwSurface* surface, uint32_t *img, uint32_t w, uin
         for (auto x = region.min.x; x < region.max.x; ++x, ++dst, ++src) {
             auto p = ALPHA_BLEND(*src, opacity);
             *dst = p + ALPHA_BLEND(*dst, 255 - surface->blender.alpha(p));
+        }
+        dbuffer += surface->stride;
+        sbuffer += w;    //TODO: need to use image's stride
+    }
+    return true;
+}
+
+
+static bool _translucentImageBlending(SwSurface* surface, uint32_t *img, uint32_t w, uint32_t h, uint32_t opacity, const SwBBox& region)
+{
+    auto dbuffer = &surface->buffer[region.min.y * surface->stride + region.min.x];
+    auto sbuffer = img + region.min.x + region.min.y * w;    //TODO: need to use image's stride
+
+    for (auto y = region.min.y; y < region.max.y; ++y) {
+        auto dst = dbuffer;
+        auto src = sbuffer;
+        for (auto x = region.min.x; x < region.max.x; ++x, ++dst, ++src) {
+            auto src_blended = ALPHA_BLEND(*src, opacity);
+            auto ialpha = 255 - surface->blender.alpha(src_blended);
+            *dst = _blendLayers(*src, *dst, opacity, ialpha, src_blended, surface->blendingMode);
         }
         dbuffer += surface->stride;
         sbuffer += w;    //TODO: need to use image's stride
@@ -551,6 +772,9 @@ static bool _rasterTranslucentImage(SwSurface* surface, uint32_t *img, uint32_t 
         if (surface->compositor->method == CompositeMethod::InvAlphaMask) {
             return _translucentImageInvAlphaMask(surface, img, w, h, opacity, region);
         }
+    }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        return _translucentImageBlending(surface, img, w, h, opacity, region);
     }
     return _translucentImage(surface, img, w, h, opacity, region);
 }
@@ -685,6 +909,9 @@ static bool _rasterTranslucentLinearGradientRect(SwSurface* surface, const SwBBo
             return _translucentLinearGradientRectInvAlphaMask(surface, region, fill);
         }
     }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        // TODO: blendingMode not supported for gradient yet
+    }
     return _translucentLinearGradientRect(surface, region, fill);
 }
 
@@ -792,6 +1019,9 @@ static bool _rasterTranslucentRadialGradientRect(SwSurface* surface, const SwBBo
         if (surface->compositor->method == CompositeMethod::InvAlphaMask) {
             return _translucentRadialGradientRectInvAlphaMask(surface, region, fill);
         }
+    }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        // TODO: blendingMode not supported for gradient yet
     }
     return _translucentRadialGradientRect(surface, region, fill);
 }
@@ -914,6 +1144,9 @@ static bool _rasterTranslucentLinearGradientRle(SwSurface* surface, const SwRleD
         if (surface->compositor->method == CompositeMethod::InvAlphaMask) {
             return _translucentLinearGradientRleInvAlphaMask(surface, rle, fill);
         }
+    }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        // TODO: blendingMode not supported for gradient yet
     }
     return _translucentLinearGradientRle(surface, rle, fill);
 }
@@ -1046,6 +1279,9 @@ static bool _rasterTranslucentRadialGradientRle(SwSurface* surface, const SwRleD
             return _translucentRadialGradientRleInvAlphaMask(surface, rle, fill);
         }
     }
+    if (surface->blendingMode != BlendingMode::Normal) {
+        // TODO: blendingMode not supported for gradient yet
+    }
     return _translucentRadialGradientRle(surface, rle, fill);
 }
 
@@ -1127,40 +1363,28 @@ bool rasterGradientShape(SwSurface* surface, SwShape* shape, unsigned id)
 
 bool rasterSolidShape(SwSurface* surface, SwShape* shape, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    if (a < 255) {
-        r = ALPHA_MULTIPLY(r, a);
-        g = ALPHA_MULTIPLY(g, a);
-        b = ALPHA_MULTIPLY(b, a);
-    }
-
-    auto color = surface->blender.join(r, g, b, a);
+    auto color = surface->blender.join(r, g, b, 0xff);
     auto translucent = _translucent(surface, a);
 
     //Fast Track
     if (shape->rect) {
-        if (translucent) return _rasterTranslucentRect(surface, shape->bbox, color);
-        return _rasterSolidRect(surface, shape->bbox, color);
+        if (translucent) return _rasterTranslucentRect(surface, shape->bbox, color, a);
+        return _rasterSolidRect(surface, shape->bbox, color, a);
     }
     if (translucent) {
-        return _rasterTranslucentRle(surface, shape->rle, color);
+        return _rasterTranslucentRle(surface, shape->rle, color, a);
     }
-    return _rasterSolidRle(surface, shape->rle, color);
+    return _rasterSolidRle(surface, shape->rle, color, a);
 }
 
 
 bool rasterStroke(SwSurface* surface, SwShape* shape, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    if (a < 255) {
-        r = ALPHA_MULTIPLY(r, a);
-        g = ALPHA_MULTIPLY(g, a);
-        b = ALPHA_MULTIPLY(b, a);
-    }
-
-    auto color = surface->blender.join(r, g, b, a);
+    auto color = surface->blender.join(r, g, b, 0xff);
     auto translucent = _translucent(surface, a);
 
-    if (translucent) return _rasterTranslucentRle(surface, shape->strokeRle, color);
-    return _rasterSolidRle(surface, shape->strokeRle, color);
+    if (translucent) return _rasterTranslucentRle(surface, shape->strokeRle, color, a);
+    return _rasterSolidRle(surface, shape->strokeRle, color, a);
 }
 
 
