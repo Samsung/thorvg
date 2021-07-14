@@ -4,6 +4,7 @@ source_file = [
     'Arc.cpp',
     'Async.cpp',
     'Blending.cpp',
+    'BlendingModes.cpp',
     'Boundary.cpp',
     'CustomTransform.cpp',
     'DirectUpdate.cpp',
