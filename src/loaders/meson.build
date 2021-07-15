@@ -13,8 +13,13 @@ if get_option('loaders').contains('tvg') == true
 endif
 
 if get_option('loaders').contains('jpg') == true
-    subdir('jpg')
-    message('Enable JPG Loader')
+    if get_option('alternative-jpg-loader') == true
+        subdir('jpg-alternative')
+        message('Loaded alternative JPG Loader')
+    else
+        subdir('jpg')
+        message('Loaded main JPG Loader')
+    endif
 endif
 
 subdir('raw')

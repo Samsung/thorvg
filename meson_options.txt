@@ -10,6 +10,11 @@ option('loaders',
    value: ['svg'],
    description: 'Enable File Loaders in thorvg')
 
+option('alternative-jpg-loader',
+    type: 'boolean',
+    value: false,
+    description: 'Use alternative jpg loader')
+
 option('vectors',
    type: 'array',
    choices: ['', 'avx'],
