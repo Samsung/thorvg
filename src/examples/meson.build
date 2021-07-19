@@ -5,6 +5,7 @@ source_file = [
     'Async.cpp',
     'Blending.cpp',
     'Boundary.cpp',
+    'ColorMasking.cpp',
     'CustomTransform.cpp',
     'DirectUpdate.cpp',
     'Duplicate.cpp',
