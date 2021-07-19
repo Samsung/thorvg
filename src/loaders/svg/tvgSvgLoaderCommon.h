@@ -225,10 +225,9 @@ struct SvgRadialGradient
 
 struct SvgComposite
 {
-    CompositeMethod method;     //TODO: Currently support either one method
     string *url;
     SvgNode* node;
-    bool applying;              //flag for checking circualr dependency.
+    bool applying;              //flag for checking circular dependency.
 };
 
 struct SvgColor
@@ -302,7 +301,8 @@ struct SvgStyleProperty
 {
     SvgStyleFill fill;
     SvgStyleStroke stroke;
-    SvgComposite comp;
+    SvgComposite clipPath;
+    SvgComposite mask;
     int opacity;
     SvgColor color;
     bool curColorSet;

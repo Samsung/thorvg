@@ -873,15 +873,10 @@ static void _handleTransformAttr(TVG_UNUSED SvgLoaderData* loader, SvgNode* node
 static void _handleClipPathAttr(TVG_UNUSED SvgLoaderData* loader, SvgNode* node, const char* value)
 {
     SvgStyleProperty* style = node->style;
-#ifdef THORVG_LOG_ENABLED
-    if (style->comp.method != CompositeMethod::None) printf("SVG: Multiple Composition Tried!\n");
-#endif
-    style->comp.method = CompositeMethod::ClipPath;
     int len = strlen(value);
     if (len >= 3 && !strncmp(value, "url", 3)) {
-        //FIXME: Support multiple composition.
-        if (style->comp.url) delete(style->comp.url);
-        style->comp.url = _idFromUrl((const char*)(value + 3));
+        if (style->clipPath.url) delete(style->clipPath.url);
+        style->clipPath.url = _idFromUrl((const char*)(value + 3));
     }
 }
 
@@ -889,15 +884,10 @@ static void _handleClipPathAttr(TVG_UNUSED SvgLoaderData* loader, SvgNode* node,
 static void _handleMaskAttr(TVG_UNUSED SvgLoaderData* loader, SvgNode* node, const char* value)
 {
     SvgStyleProperty* style = node->style;
-#ifdef THORVG_LOG_ENABLED
-    if (style->comp.method != CompositeMethod::None) printf("SVG: Multiple Composition Tried!\n");
-#endif
-    style->comp.method = CompositeMethod::AlphaMask;
     int len = strlen(value);
     if (len >= 3 && !strncmp(value, "url", 3)) {
-        //FIXME: Support multiple composition.
-        if (style->comp.url) delete(style->comp.url);
-        style->comp.url = _idFromUrl((const char*)(value + 3));
+        if (style->mask.url) delete(style->mask.url);
+        style->mask.url = _idFromUrl((const char*)(value + 3));
     }
 }
 
@@ -1707,7 +1697,8 @@ static void _copyAttr(SvgNode* to, const SvgNode* from)
     *to->style = *from->style;
     if (from->style->fill.paint.url) to->style->fill.paint.url = new string(from->style->fill.paint.url->c_str());
     if (from->style->stroke.paint.url) to->style->stroke.paint.url = new string(from->style->stroke.paint.url->c_str());
-    if (from->style->comp.url) to->style->comp.url = new string(from->style->comp.url->c_str());
+    if (from->style->clipPath.url) to->style->clipPath.url = new string(from->style->clipPath.url->c_str());
+    if (from->style->mask.url) to->style->mask.url = new string(from->style->mask.url->c_str());
 
     //Copy node attribute
     switch (from->type) {
@@ -2598,9 +2589,13 @@ static void _updateGradient(SvgNode* node, Array<SvgStyleGradient*>* gradients)
 
 static void _updateComposite(SvgNode* node, SvgNode* root)
 {
-    if (node->style->comp.url && !node->style->comp.node) {
-        SvgNode *findResult = _findNodeById(root, node->style->comp.url);
-        if (findResult) node->style->comp.node = findResult;
+    if (node->style->clipPath.url && !node->style->clipPath.node) {
+        SvgNode *findResult = _findNodeById(root, node->style->clipPath.url);
+        if (findResult) node->style->clipPath.node = findResult;
+    }
+    if (node->style->mask.url && !node->style->mask.node) {
+        SvgNode *findResult = _findNodeById(root, node->style->mask.url);
+        if (findResult) node->style->mask.node = findResult;
     }
     if (node->child.count > 0) {
         auto child = node->child.data;
@@ -2615,8 +2610,9 @@ static void _freeNodeStyle(SvgStyleProperty* style)
 {
     if (!style) return;
 
-    //style->comp.node has only the addresses of node. Therefore, style->comp.node is released from _freeNode.
-    delete(style->comp.url);
+    //style->clipPath.node and style->mask.node has only the addresses of node. Therefore, node is released from _freeNode.
+    delete(style->clipPath.url);
+    delete(style->mask.url);
 
     if (style->fill.paint.gradient) delete(style->fill.paint.gradient);
     if (style->stroke.paint.gradient) delete(style->stroke.paint.gradient);
