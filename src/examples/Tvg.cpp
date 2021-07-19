@@ -21,21 +21,172 @@
  */
 
 #include "Common.h"
+#include <fstream>
 
 /************************************************************************/
 /* Drawing Commands                                                     */
 /************************************************************************/
 
+void tvgDrawStar(tvg::Shape* star)
+{
+    star->moveTo(199, 34);
+    star->lineTo(253, 143);
+    star->lineTo(374, 160);
+    star->lineTo(287, 244);
+    star->lineTo(307, 365);
+    star->lineTo(199, 309);
+    star->lineTo(97, 365);
+    star->lineTo(112, 245);
+    star->lineTo(26, 161);
+    star->lineTo(146, 143);
+    star->close();
+}
+
 void tvgDrawCmds(tvg::Canvas* canvas)
 {
-   if (!canvas) return;
+    if (!canvas) return;
 
-   auto picture = tvg::Picture::gen();
-   if (picture->load(EXAMPLE_DIR"/test.tvg") != tvg::Result::Success) {
-        cout << "TVG is not supported, Did you enable TVG Loader??" << endl;
+    //prepare the main scene
+    auto scene = tvg::Scene::gen();
+
+    tvg::Fill::ColorStop colorStops1[3];
+    colorStops1[0] = {0, 255, 0, 0, 255};
+    colorStops1[1] = {0.5, 0, 0, 255, 127};
+    colorStops1[2] = {1, 127, 127, 127, 127};
+
+    tvg::Fill::ColorStop colorStops2[2];
+    colorStops2[0] = {0, 255, 0, 0, 255};
+    colorStops2[1] = {1, 50, 0, 255, 255};
+
+    tvg::Fill::ColorStop colorStops3[2];
+    colorStops3[0] = {0, 0, 0, 255, 155};
+    colorStops3[1] = {1, 0, 255, 0, 155};
+
+    float dashPattern[2] = {30, 40};
+
+    //gradient shape + dashed stroke
+    auto fillStroke1 = tvg::LinearGradient::gen();
+    fillStroke1->linear(20, 120, 380, 280);
+    fillStroke1->colorStops(colorStops1, 3);
+
+    auto fillShape1 = tvg::LinearGradient::gen();
+    fillShape1->linear(20, 120, 380, 280);
+    fillShape1->colorStops(colorStops1, 3);
+
+    auto shape1 = tvg::Shape::gen();
+    shape1->appendCircle(200, 200, 180, 80);
+    shape1->fill(move(fillShape1));
+    shape1->stroke(20);
+    shape1->stroke(dashPattern, 2);
+    shape1->stroke(move(fillStroke1));
+
+    if (scene->push(move(shape1)) != tvg::Result::Success) return;
+
+    //clipped image
+    ifstream file(EXAMPLE_DIR"/rawimage_200x300.raw");
+    if (!file.is_open()) return;
+    uint32_t *data = (uint32_t*) malloc(sizeof(uint32_t) * 200 * 300);
+    if (!data) return;
+    file.read(reinterpret_cast<char*>(data), sizeof(uint32_t) * 200 * 300);
+    file.close();
+
+    auto image = tvg::Picture::gen();
+    if (image->load(data, 200, 300, true) != tvg::Result::Success) return;
+    image->translate(400, 0);
+    image->scale(2);
+
+    auto imageClip = tvg::Shape::gen();
+    imageClip->appendCircle(400, 200, 80, 180);
+    imageClip->fill(0, 0, 0, 155);
+    imageClip->translate(200, 0);
+    image->composite(move(imageClip), tvg::CompositeMethod::ClipPath);
+
+    if (scene->push(move(image)) != tvg::Result::Success) return;
+    free(data);
+
+    //nested paints
+    auto scene1 = tvg::Scene::gen();
+
+    auto shape2 = tvg::Shape::gen();
+    shape2->appendRect(50, 0, 50, 100, 10, 40);
+    shape2->fill(0, 0, 255, 125);
+    scene1->push(move(shape2));
+    scene1->rotate(10);
+    scene1->scale(2);
+    scene1->translate(400,400);
+
+    auto shape3 = tvg::Shape::gen();
+    shape3->appendRect(0, 0, 50, 100, 10, 40);
+    auto fillShape3 = tvg::RadialGradient::gen();
+    fillShape3->radial(25, 50, 25);
+    fillShape3->colorStops(colorStops2, 2);
+    shape3->fill(move(fillShape3));
+    shape3->scale(2);
+    shape3->opacity(200);
+    shape3->translate(400, 400);
+
+    auto scene2 = tvg::Scene::gen();
+    scene2->push(move(scene1));
+    scene2->push(move(shape3));
+    scene2->translate(100, 100);
+
+    if (scene->push(move(scene2)) != tvg::Result::Success) return;
+
+    //masked svg file
+    auto svg = tvg::Picture::gen();
+    if (svg->load(EXAMPLE_DIR"/tiger.svg") != tvg::Result::Success) return;
+    svg->opacity(200);
+    svg->scale(0.3);
+    svg->translate(50, 450);
+    auto svgMask = tvg::Shape::gen();
+    tvgDrawStar(svgMask.get());
+    svgMask->fill(0, 0, 0, 255);
+    svgMask->translate(30, 440);
+    svgMask->opacity(200);
+    svgMask->scale(0.7);
+    svg->composite(move(svgMask), tvg::CompositeMethod::AlphaMask);
+
+    if (scene->push(move(svg)) != tvg::Result::Success) return;
+
+    //solid top circle and gradient bottom circle
+    auto circ1 = tvg::Shape::gen();
+    circ1->appendCircle(400, 375, 50, 50);
+    auto fill1 = tvg::RadialGradient::gen();
+    fill1->radial(400, 375, 50);
+    fill1->colorStops(colorStops3, 2);
+    circ1->fill(move(fill1));
+    circ1->fill(0, 255, 0, 155);
+
+    auto circ2 = tvg::Shape::gen();
+    circ2->appendCircle(400, 425, 50, 50);
+    circ2->fill(0, 255, 0, 155);
+    auto fill2 = tvg::RadialGradient::gen();
+    fill2->radial(400, 425, 50);
+    fill2->colorStops(colorStops3, 2);
+    circ2->fill(move(fill2));
+
+    if (scene->push(move(circ1)) != tvg::Result::Success) return;
+    if (scene->push(move(circ2)) != tvg::Result::Success) return;
+
+    //inv mask applied to the main scene
+    auto mask = tvg::Shape::gen();
+    mask->appendCircle(400, 400, 15, 15);
+    mask->fill(0, 0, 0, 255);
+    scene->composite(move(mask), tvg::CompositeMethod::InvAlphaMask);
+
+    //save the tvg file
+    if (tvg::Saver::save(move(scene), EXAMPLE_DIR"/test.tvg") != tvg::Result::Success) {
+        cout << "Problem with saving the test.tvg file." << endl;
         return;
-   }
-   canvas->push(move(picture));
+    }
+
+    //load the tvg file
+    auto picture = tvg::Picture::gen();
+    if (picture->load(EXAMPLE_DIR"/test.tvg") != tvg::Result::Success) {
+        cout << "Problem with loading the test.tvg file." << endl;
+        return;
+    }
+    canvas->push(move(picture));
 }
 
 
